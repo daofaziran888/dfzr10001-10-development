@@ -1,4 +1,7 @@
-"""采集任务接口：维护采集任务，覆盖提交执行、暂停任务、恢复任务等动作。"""
+"""采集任务接口：维护采集任务，覆盖提交执行、暂停任务、恢复任务等动作。
+
+任务工作台同时承载解析诊断生成的修复待办，并把诊断摘要同步到任务清单视图。
+"""
 from __future__ import annotations
 
 from typing import Any
@@ -6,6 +9,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Query
 
 from app.schemas import ActionResult, EntryPayload, PageResult
+from app.services.diagnosis import diagnosis_service
 from app.services.task import TaskService
 
 router = APIRouter(prefix="/api/task", tags=["采集任务"])
@@ -28,6 +32,32 @@ def list_entries(
         raise HTTPException(status_code=400, detail="每页最多 200 条，请缩小分页范围")
     items, total = service.list_entries(keyword=keyword, status=status, page=page, size=size)
     return PageResult(items=items, total=total, page=page, size=size)
+
+
+@router.get("/export")
+def export_entries() -> dict[str, Any]:
+    """导出采集任务清单：返回当前过滤条件下的全量数据。"""
+    items, total = service.list_entries(page=1, size=10000)
+    return {"module": "task", "total": total, "items": items}
+
+
+@router.get("/repair-todos")
+def repair_todos() -> dict[str, Any]:
+    """任务工作台的修复待办：字段级诊断失败后自动生成，含诊断摘要与转换前后值。"""
+    return {
+        "summary": diagnosis_service.todo_summary(),
+        "items": diagnosis_service.list_todos(),
+    }
+
+
+@router.post("/repair-todos/{todo_id}/actions", response_model=ActionResult)
+def run_repair_todo_action(todo_id: int, payload: EntryPayload) -> ActionResult:
+    """对修复待办执行标记已修复/重新打开。"""
+    action = str(payload.values.get("action") or "").strip()
+    todo, message = diagnosis_service.run_todo_action(todo_id, action)
+    if todo is None:
+        return ActionResult(ok=False, message=message)
+    return ActionResult(ok=True, message=message, entry=todo)
 
 
 @router.get("/{entry_id}", response_model=dict)
@@ -56,10 +86,3 @@ def run_action(entry_id: int, payload: EntryPayload) -> ActionResult:
     if entry is None:
         return ActionResult(ok=False, message=message)
     return ActionResult(ok=True, message=message, entry=entry)
-
-
-@router.get("/export")
-def export_entries() -> dict[str, Any]:
-    """导出采集任务清单：返回当前过滤条件下的全量数据。"""
-    items, total = service.list_entries(page=1, size=10000)
-    return {"module": "task", "total": total, "items": items}
